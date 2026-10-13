@@ -4,6 +4,11 @@ global WindowOpenDisplay
 global WindowSetupWindow
 global WindowShowWindow
 global WindowTitleWindow
+global WindowCreateGraphicsContext
+global WindowSetForegroundColor
+global WindowMaximizeWindow
+global WindowSelectEvents
+global WindowDrawRectangle
 
 ; X11 functions
 extern XOpenDisplay
@@ -24,6 +29,7 @@ extern XInternAtom
 extern XSetWMProtocols
 extern XCloseDisplay
 extern XLookupString
+extern XChangeProperty
 
 ; Xft functions
 extern XftFontOpenName
@@ -40,6 +46,11 @@ ExposureMask equ 1 << 15
 PointerMotionMask equ 1 << 6
 LeaveWindowMask equ 1 << 5
 EventMask equ KeyPressMask | ButtonPressMask | ExposureMask | LeaveWindowMask | PointerMotionMask | ButtonReleaseMask
+
+section .rodata
+    wm_state_name db "_NET_WM_STATE", 0
+    max_horz_name db "_NET_WM_MAXIMIZED_HORZ", 0
+    max_vert_name db "_NET_WM_MAXIMIZED_VERT", 0
 
 ; Opens an X display
 ; @return rax *dpy (0 if failed)
@@ -102,3 +113,81 @@ WindowShowWindow:
 ; @param rdx *Buf window title string
 WindowTitleWindow:
     jmp XStoreName
+
+; Creates a Graphics Context
+; @param rdi Display* dpy
+; @param rsi Window ID
+; @return rax Graphics Context (0 if failed)
+WindowCreateGraphicsContext:
+    xor edx, edx
+    xor ecx, ecx
+    jmp XCreateGC
+
+; Sets Graphics Context Foreground Color
+; @param rdi Display* dpy
+; @param rsi Graphics Context
+; @param rdx foreground
+WindowSetForegroundColor:
+    jmp XSetForeground
+
+; Maximizes an X window
+; @param rdi Display* dpy
+; @param rsi Window ID
+WindowMaximizeWindow:
+    push rbx
+    push r12
+    push r13 ; wm_state atom
+
+    mov rbx, rdi ; Display*
+    mov r12, rsi ; Window ID
+
+    sub rsp, 32
+
+    %macro XInterAtomMacro 3
+        mov rdi, %1 ; Display*
+        mov rsi, %2 ; Atom name
+        xor edx, edx
+        call XInternAtom
+        mov %3, rax
+    %endmacro
+
+    XInterAtomMacro rbx, wm_state_name, r13
+    XInterAtomMacro rbx, max_horz_name, [rsp + 16]
+    XInterAtomMacro rbx, max_vert_name, [rsp + 24]
+
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov ecx, 4
+    mov r8d, 32
+    xor r9d, r9d
+    lea rax, [rsp+16]
+    mov [rsp], rax
+    mov qword [rsp + 8], 2
+    call XChangeProperty
+
+    add rsp, 32
+
+    .exit:
+        pop r13
+        pop r12
+        pop rbx
+        ret
+
+; Selects input masks
+; @param rdi Display* dpy
+; @param rsi Window ID
+; @param edx EventMask
+WindowSelectEvents:
+    jmp XSelectInput
+
+; Draws a rectangle to a window
+; @param rdi Display* dpy
+; @param rsi Window ID
+; @param rdx gc
+; @param rcx X Position
+; @param r8 Y Position
+; @param r9 Width
+; @param stack Height
+WindowDrawRectangle:
+    jmp XFillRectangle
