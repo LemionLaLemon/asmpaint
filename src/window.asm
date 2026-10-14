@@ -9,6 +9,8 @@ global WindowSetForegroundColor
 global WindowMaximizeWindow
 global WindowSelectEvents
 global WindowDrawRectangle
+global WindowCreateImage
+global WindowPutImage
 
 ; X11 functions
 extern XOpenDisplay
@@ -30,6 +32,8 @@ extern XSetWMProtocols
 extern XCloseDisplay
 extern XLookupString
 extern XChangeProperty
+extern XCreateImage
+extern XPutImage
 
 ; Xft functions
 extern XftFontOpenName
@@ -191,3 +195,31 @@ WindowSelectEvents:
 ; @param stack Height
 WindowDrawRectangle:
     jmp XFillRectangle
+
+; Creates an X image
+; @param rdi Display* dpy
+; @param rsi Visual*
+; @param rdx uint depth
+; @param rcx int format
+; @param r8 int offset
+; @param r9 char* data
+; @param stack uint width
+; @param stack uint height
+; @param stack int bitmap pad
+; @param stack int bytes_per_line
+WindowCreateImage: ; vade retro satana! (function so cursed with stack args an exorcism had to be carried out)
+    jmp XCreateImage
+
+; Draws an XImage 
+; @param rdi Display* dpy
+; @param rsi Drawable
+; @param rdx gc
+; @param rcx Ximage*
+; @param r8d int src_x
+; @param r9d int src_y
+; @param stack int dest_x
+; @param stack int dest_y
+; @param stack uint width
+; @param stack uint height
+WindowPutImage:
+    jmp XPutImage
