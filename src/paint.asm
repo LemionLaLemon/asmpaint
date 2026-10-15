@@ -17,6 +17,7 @@ extern WindowDrawRectangle
 extern XNextEvent
 extern XDefaultVisual
 extern XDefaultDepth
+extern XPending
 extern WindowCreateImage
 extern WindowPutImage
 
@@ -133,9 +134,16 @@ section .bss
     Canvas resq 1 ; *Canvas
     CanvasImage resq 1
 
+    WorkingBuffer resq 1
+
     SelectedColor resd 1
     SelectedTool resb 1
     MouseDown: resb 1
+
+    ; fill in the gaps
+    LastX resd 1
+    LastY resd 1
+    Dirty resb 1
 
 section .text
 ; Styles
@@ -217,6 +225,7 @@ _start:
     mov dword [CanvasHeight], 480
 
     call NewCanvas
+    call CreateCanvasImage
     call DrawCanvas
 
     mov dword [SelectedColor], 0x000000
@@ -224,27 +233,39 @@ _start:
     mov byte [MouseDown], 0
 
     mainloop:
+        cmp byte [Dirty], 0
+        je .wait
         mov rdi, [dpy]
-        lea rsi, [ev]
-        call XNextEvent
+        call XPending
+        
+        test eax, eax
+        jnz .wait
 
-        cmp dword [ev], 22
-        je .configure
+        call DrawCanvas
+        mov byte [Dirty], 0
 
-        cmp dword [ev], 12
-        je .redraw
+        .wait:
+            mov rdi, [dpy]
+            lea rsi, [ev]
+            call XNextEvent
 
-        ; Button Press Event
-        cmp dword [ev], 4
-        je onMouseDown
+            cmp dword [ev], 22
+            je .configure
 
-        ; Button Release Event
-        cmp dword [ev], 5
-        je onMouseUp
+            cmp dword [ev], 12
+            je .redraw
 
-        ; "motionnotify" probably mouse move i give up
-        cmp dword [ev], 6
-        je onMouseMove
+            ; Button Press Event
+            cmp dword [ev], 4
+            je onMouseDown
+
+            ; Button Release Event
+            cmp dword [ev], 5
+            je onMouseUp
+
+            ; "motionnotify" probably mouse move i give up
+            cmp dword [ev], 6
+            je onMouseMove
 
     jmp mainloop
     
@@ -286,17 +307,153 @@ _start:
     endstruc
 
     onMouseMove:
-        test dword [ev + Mouse.state], 0x100 ; lmb mask
+        cmp byte [MouseDown], 0
+        je mainloop
+        test dword [ev + Mouse.state], 0x100
         jz mainloop
-        jmp paintPixel
+
+        mov edx, [ev + Mouse.x]
+        sub edx, Toolbar_Width + Border_Width + CanvasMargin
+        mov ecx, [ev + Mouse.y]
+        sub ecx, Statusbar_Height + Border_Width + CanvasMargin
+        mov edi, [LastX]
+        mov esi, [LastY]
+        mov [LastX], edx
+        mov [LastY], ecx
+        call DrawLine
+
+        mov byte [Dirty], 1
+        jmp mainloop
 
     onMouseUp:
+        cmp byte [MouseDown], 0
+        je mainloop
+        
         mov byte [MouseDown], 0
+
+        mov rsi, [WorkingBuffer]
+        mov rdi, [Canvas]
+        mov ecx, [CanvasWidth]
+        imul ecx, [CanvasHeight]
+        cld
+        rep movsd
         jmp mainloop
 
     onMouseDown:
-        cmp dword [ev + Mouse.button], 1
-        jne mainloop
+            cmp dword [ev + Mouse.button], 1
+            jne mainloop
+
+            mov eax, [ev + Mouse.x]
+            sub eax, PaletteOffset
+            jl .not_palette
+
+            mov ecx, [ev + Mouse.y]
+            mov edx, [height]
+            sub edx, Colorpicker_Height
+            add edx, Margin
+            sub ecx, edx
+            jl .not_palette
+            cmp ecx, 2 * ColorPickWidth
+            jge .not_palette
+
+            shr eax, 4
+            shr ecx, 4
+            imul ecx, ColorCols
+            add eax, ecx
+            lea rdx, [Colors]
+            mov eax, [rdx + rax * 4]
+            mov [SelectedColor], eax
+            jmp mainloop
+
+            .not_palette:
+            cmp byte [SelectedTool], Tool.pencil
+            jne mainloop
+
+            mov edx, [ev + Mouse.x]
+            sub edx, Toolbar_Width + Border_Width + CanvasMargin
+
+            mov ecx, [ev + Mouse.y]
+            sub ecx, Statusbar_Height + Border_Width + CanvasMargin
+
+            cmp edx, [CanvasWidth]
+            jae mainloop
+            cmp ecx, [CanvasHeight]
+            jae mainloop
+
+            mov byte [MouseDown], 1
+            mov [LastX], edx
+            mov [LastY], ecx
+            mov edi, edx
+            mov esi, ecx
+            call DrawLine
+
+            mov byte [Dirty], 1
+            jmp mainloop
+
+    DrawLine:
+        push rbx
+        push r12
+
+        mov r8d, edx
+        sub r8d, edi
+        mov r10d, 1
+        jns .sign_pos
+
+        neg r8d
+        mov r10d, -1
+
+        ; r8d abs delt x, r10d sx
+        .sign_pos:
+            mov r9d, ecx
+            sub r9d, esi
+            mov r11d, 1
+            jns .sy_ok
+
+            neg r9d
+            mov r11d, -1
+        
+        ; r9d neg abs delt y, r11d sy
+        .sy_ok:
+            neg r9d
+            lea ebx, [r8 + r9]
+
+        .loop:
+            cmp edi, [CanvasWidth]
+            jae .skip
+            cmp esi, [CanvasHeight]
+            jae .skip
+            mov eax, esi
+            imul eax, [CanvasWidth]
+            add eax, edi
+            mov r12, [WorkingBuffer]
+            lea r12, [r12 + rax * 4]
+            mov eax, [SelectedColor]
+            mov [r12], eax
+
+        .skip:
+            cmp edi, edx
+            jne .step
+            cmp esi, ecx
+            je .done
+
+        .step: 
+            lea eax, [rbx + rbx]
+            cmp eax, r9d
+            jl .kaput
+            add ebx, r9d
+            add edi, r10d
+
+        .kaput:
+            cmp eax, r8d
+            jg .loop
+            add ebx, r8d
+            add esi, r11d
+            jmp .loop
+
+        .done:  
+            pop r12
+            pop rbx
+            ret
 
     paintPixel:
         cmp byte [SelectedTool], Tool.pencil
@@ -329,32 +486,41 @@ _start:
         .exit:
             jmp mainloop
 
-    NewCanvas:
+    NewEmptyCanvas:
         sub rsp, 8
         mov edi, [CanvasWidth]
-        imul edi, dword [CanvasHeight]
+        imul edi, [CanvasHeight]
         shl edi, 2
         call malloc
-        add rsp, 8
 
         test rax, rax
-        jz .malloc_died
-        
-        mov [Canvas], rax
+        jz exit
 
-        mov rdi, [Canvas]
+        mov [rsp], rax
+        mov rdi, rax
         mov ecx, [CanvasWidth]
         imul ecx, [CanvasHeight]
         mov eax, 0x00FFFFFF
         cld
         rep stosd
 
+        mov rax, [rsp]
+        add rsp, 8
+        ret
+
+    NewCanvas:
+        sub rsp, 8
+        call NewEmptyCanvas
+        mov [Canvas], rax
+        call NewEmptyCanvas
+        mov [WorkingBuffer], rax
+        add rsp, 8
         ret
 
         .malloc_died:
             jmp exit
 
-    DrawCanvas:
+    CreateCanvasImage:
         push r12
         push r13
         sub rsp, 40
@@ -367,7 +533,6 @@ _start:
         mov rdi, [dpy]
         mov esi, [screen_num]
         call XDefaultDepth
-
         mov r13d, eax
 
         mov eax, [CanvasWidth]
@@ -387,7 +552,7 @@ _start:
         mov edx, r13d
         mov ecx, 2
         xor r8d, r8d
-        mov r9, [Canvas]
+        mov r9, [WorkingBuffer]
 
         call WindowCreateImage
         test rax, rax
@@ -395,25 +560,21 @@ _start:
 
         mov [CanvasImage], rax
 
-        mov eax, Toolbar_Width
-        add eax, Border_Width
-        add eax, CanvasMargin
-        ; sub eax, [PanX] ; future panning compatability
-        movsxd rax, eax
+        add rsp, 40
+
+        pop r13
+        pop r12
+        ret
+
+    DrawCanvas:
+        sub rsp, 40
+
+        mov eax, Toolbar_Width + Border_Width + CanvasMargin
         mov [rsp], rax
-
-        mov eax, Statusbar_Height
-        add eax, Border_Width
-        add eax, CanvasMargin
-        ; sub eax, [PanY] ; future panning compatability
-        movsxd rax, eax
+        mov eax, Statusbar_Height + Border_Width + CanvasMargin
         mov [rsp + 8], rax
-
-        ; width
         mov eax, [CanvasWidth]
         mov [rsp + 16], rax
-
-        ; height
         mov eax, [CanvasHeight]
         mov [rsp + 24], rax
 
@@ -428,9 +589,6 @@ _start:
         call WindowPutImage
 
         add rsp, 40
-
-        pop r13
-        pop r12
         ret
 
     DrawGUI:
