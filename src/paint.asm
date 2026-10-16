@@ -18,6 +18,7 @@ extern XNextEvent
 extern XDefaultVisual
 extern XDefaultDepth
 extern XPending
+extern XDefaultScreen
 extern WindowCreateImage
 extern WindowPutImage
 
@@ -67,10 +68,6 @@ section .data
         .polygon equ 13
         .circle equ 14
         .roundrect equ 15
-    endstruc
-
-    struc ColorSelection
-        .color resd 1
     endstruc
 
     Colors:
@@ -137,7 +134,9 @@ section .bss
     WorkingBuffer resq 1
 
     SelectedColor resd 1
+    SecondarySelectedColor resd 1
     SelectedTool resb 1
+
     MouseDown: resb 1
 
     ; fill in the gaps
@@ -183,6 +182,10 @@ _start:
     test rax, rax
     jz exit
     mov [dpy], rax
+
+    mov rdi, rax
+    call XDefaultScreen
+    mov [screen_num], eax
 
     mov rdi, [dpy]
     mov esi, 800
@@ -346,6 +349,8 @@ _start:
             mov eax, [ev + Mouse.x]
             sub eax, PaletteOffset
             jl .not_palette
+            cmp eax, ColorCols * ColorPickWidth
+            jge .not_palette
 
             mov ecx, [ev + Mouse.y]
             mov edx, [height]
@@ -363,6 +368,9 @@ _start:
             lea rdx, [Colors]
             mov eax, [rdx + rax * 4]
             mov [SelectedColor], eax
+
+            call RedrawSelectedColor
+            
             jmp mainloop
 
             .not_palette:
@@ -455,37 +463,6 @@ _start:
             pop rbx
             ret
 
-    paintPixel:
-        cmp byte [SelectedTool], Tool.pencil
-        jne .exit
-
-        mov edi, [ev + Mouse.x]
-        sub edi, Toolbar_Width + Border_Width + CanvasMargin
-
-        mov esi, [ev + Mouse.y]
-        sub esi, Statusbar_Height + Border_Width + CanvasMargin
-
-        cmp edi, [CanvasWidth]
-        jae .exit
-
-        cmp esi, [CanvasHeight]
-        jae .exit
-
-        mov byte [MouseDown], 1
-
-        mov eax, esi
-        imul eax, [CanvasWidth]
-        add eax, edi
-
-        mov rdx, [Canvas]
-        mov ecx, [SelectedColor]
-        mov [rdx + rax * 4], ecx
-
-        call DrawCanvas
-
-        .exit:
-            jmp mainloop
-
     NewEmptyCanvas:
         sub rsp, 8
         mov edi, [CanvasWidth]
@@ -516,9 +493,6 @@ _start:
         mov [WorkingBuffer], rax
         add rsp, 8
         ret
-
-        .malloc_died:
-            jmp exit
 
     CreateCanvasImage:
         push r12
@@ -594,7 +568,6 @@ _start:
     DrawGUI:
         sub rsp, 8
 
-        ; TODO: draw canvas
         ; TODO: draw scrollbars
 
         ; Right toolbar border
@@ -625,13 +598,55 @@ _start:
         sub r10d, Statusbar_Height
         sub r10d, Border_Width
         DrawFilledRectangle 0, r10d, [width], Border_Width
-        DrawFilledRectangle 0, r10d, [width], Border_Width
 
         DrawFilledRectangle 0, Statusbar_Height, [width], Border_Width
 
-        SetForeground 0xFF0000
-        ; DrawFilledRectangle (Toolbar_Width - Button_Size)/2, (Toolbar_Width - Button_Size)/2 + 0, Button_Size, Button_Size ; TODO: brush tool
+
         add rsp, 8
+
+        RedrawSelectedColor:
+        sub rsp, 8
+        SetForeground 0xA6A6A6
+        mov r10d, [height]
+        sub r10d, Colorpicker_Height
+        add r10d, 21
+        DrawFilledRectangle 12, r10d, 15, 15
+
+        SetForeground 0xF5F5F5
+        mov r10d, [height]
+        sub r10d, Colorpicker_Height
+        add r10d, 21
+        DrawFilledRectangle 12, r10d, 14, 14
+
+        SetForeground [SecondarySelectedColor]
+        mov r10d, [height]
+        sub r10d, Colorpicker_Height
+        add r10d, 22
+        DrawFilledRectangle 13, r10d, 12, 12
+
+        SetForeground 0xA6A6A6
+        mov r10d, [height]
+        sub r10d, Colorpicker_Height
+        add r10d, 14
+        DrawFilledRectangle 5, r10d, 15, 15
+
+        SetForeground 0xF5F5F5
+        mov r10d, [height]
+        sub r10d, Colorpicker_Height
+        add r10d, 14
+        DrawFilledRectangle 5, r10d, 14, 14
+
+        SetForeground [SelectedColor]
+        mov r10d, [height]
+        sub r10d, Colorpicker_Height
+        add r10d, 15
+        DrawFilledRectangle 6, r10d, 12, 12
+        add rsp, 8
+
+        ; SetForeground 0xFF0000
+        ; DrawFilledRectangle (Toolbar_Width - Button_Size)/2, (Toolbar_Width - Button_Size)/2 + 0, Button_Size, Button_Size ; TODO: brush tool
+
+        ; Fall through to DrawColorSelection
 
     DrawColorSelection: 
         push r12
@@ -681,7 +696,7 @@ _start:
 
             ; Actual color 12x12
             lea rax, [Colors]
-            SetForeground [Colors + rbx * 4]
+            SetForeground [rax + rbx * 4]
             inc r12d
             inc r13d
             DrawFilledRectangle r12d, r13d, 12, 12
